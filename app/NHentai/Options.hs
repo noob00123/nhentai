@@ -22,15 +22,15 @@ makeClassy ''DownloadOptions
 
 downloadOptionsParser :: Parser DownloadOptions
 downloadOptionsParser = DownloadOptions
-	<$> download_page_thumbnail_parser
-	<*> download_page_image_parser
+	<$> download_page_thumbnail
+	<*> download_page_image
 	where
-	download_page_thumbnail_parser = switch
+	download_page_thumbnail = switch
 		( short 'T'
 		<> long "thumbnails"
 		<> help "Download page thumbnails of a gallery"
 		)
-	download_page_image_parser = switch
+	download_page_image = switch
 		( short 'I'
 		<> long "images"
 		<> help "Download page images of a gallery"
@@ -65,15 +65,15 @@ mkDefaultOutputConfig2 :: FilePath -> OutputConfig
 mkDefaultOutputConfig2 output_dir = simpleOutputConfig $ \gid -> let unref_gid = unrefine gid in output_dir </> show (unref_gid `div` 1000) </> show unref_gid
 
 outputConfigParser :: Parser OutputConfig
-outputConfigParser = (mk_conf2_parser <|> mk_conf1_parser) <*> output_dir_parser
+outputConfigParser = (mk_conf2 <|> mk_conf1) <*> output_dir
 	where
-	mk_conf1_parser = pure mkDefaultOutputConfig
-	mk_conf2_parser = flag' mkDefaultOutputConfig2
+	mk_conf1 = pure mkDefaultOutputConfig
+	mk_conf2 = flag' mkDefaultOutputConfig2
 		( short '2'
 		<> long "output-config-2"
 		<> help "Use another directory format, instead of gid -> dest_dir/<gid>/, the directory format will become gid -> dest_dir/<div gid 1000>/<gid>"
 		)
-	output_dir_parser = strOption
+	output_dir = strOption
 		( short 'o'
 		<> long "output-dir"
 		<> metavar "OUTPUT_DIR"
@@ -92,16 +92,16 @@ data GidInputOption
 	deriving (Show, Eq)
 
 gidInputOptionParser :: Parser GidInputOption
-gidInputOptionParser = single_parser <|> list_file_parser
+gidInputOptionParser = single <|> list_file
 	where
-	single_parser = GidInputOptionSingle
+	single = GidInputOptionSingle
 		<$> option refineReadM
 			( short 'g'
 			<> long "gallery"
 			<> metavar "GALLERY_ID"
 			<> help "Which gallery to download"
 			)
-	list_file_parser = GidInputOptionListFile
+	list_file = GidInputOptionListFile
 		<$> strOption
 			( short 'f'
 			<> long "list-file"
@@ -134,12 +134,12 @@ mainOptionsParser = subparser
 
 	main_download_option = MainOptionsDownload
 		<$> gidInputOptionParser
-		<*> num_leaf_threads_parser
-		<*> num_branch_threads_parser
+		<*> num_leaf_threads
+		<*> num_branch_threads
 		<*> outputConfigParser
 		<*> downloadOptionsParser
 		where
-		num_leaf_threads_parser = option refineReadM
+		num_leaf_threads = option refineReadM
 			( short 't'
 			<> long "leaf-threads"
 			<> metavar "NUM_THREADS"
@@ -147,7 +147,7 @@ mainOptionsParser = subparser
 			<> showDefault
 			<> help "Set the number of threads used in downloading"
 			)
-		num_branch_threads_parser = option refineReadM
+		num_branch_threads = option refineReadM
 			( short 'b'
 			<> long "branch-threads"
 			<> metavar "NUM_THREADS"
@@ -175,10 +175,10 @@ data ProgramOptions
 		}
 
 programOptionsParser :: Parser ProgramOptions
-programOptionsParser = ProgramOptions <$> maybe_log_level_parser <*> mainOptionsParser
+programOptionsParser = ProgramOptions <$> maybe_log_level <*> mainOptionsParser
 	where
-	maybe_log_level_parser :: Parser (Maybe LogLevel)
-	maybe_log_level_parser = (Just <$> f) <|> pure Nothing
+	maybe_log_level :: Parser (Maybe LogLevel)
+	maybe_log_level = (Just <$> f) <|> pure Nothing
 		where
 		f = option logLevelReadM
 			( short 'l'
