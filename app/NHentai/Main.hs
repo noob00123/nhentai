@@ -54,6 +54,13 @@ data Context
 
 makeLenses ''Context
 
+asyncLeaf :: (MonadUnliftIO m) => Context -> m a -> m (Async a)
+asyncLeaf ctx f = async $ do
+	liftIO $ waitQSem (ctx ^. ctxLeafSem)
+	a <- f
+	liftIO $ signalQSem (ctx ^. ctxLeafSem)
+	pure a
+
 initContext :: MonadIO m => Refined Positive Int -> Refined Positive Int -> m Context
 initContext leaf_threads branch_threads = Context
 	<$> (liftIO . newQSem . unrefine $ leaf_threads)
@@ -139,13 +146,6 @@ getGidInputStream (GidInputOptionListFile file_path) = do
 		where
 		prefix = "In " <> T.pack file_path <> ":" <> T.pack (show line_at) <> ": "
 
-asyncLeaf :: (MonadUnliftIO m) => Context -> m a -> m (Async a)
-asyncLeaf ctx f = async $ do
-	liftIO $ waitQSem (ctx ^. ctxLeafSem)
-	a <- f
-	liftIO $ signalQSem (ctx ^. ctxLeafSem)
-	pure a
-
 downloadPagesWith :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m)
 	=> (MediaId -> PageIndex -> ImageType -> m URI)
 	-> (Lens' OutputConfig (GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath))
@@ -165,7 +165,6 @@ downloadPagesWith url_maker maker_lens ctx out_cfg mgr g = loop $$(refineTH 1) (
 			let file_path = (out_cfg ^. maker_lens) (g ^. galleryId) (g ^. mediaId) pid imgtype
 			lift (asyncLeaf ctx $ httpThenSaveAsIfMissing mgr file_path req) >>= S.yield
 			loop pid' pages
-
 
 downloadPageThumbnails :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
 downloadPageThumbnails = downloadPagesWith mkPageThumbnailUri pageThumbnailPathMaker
