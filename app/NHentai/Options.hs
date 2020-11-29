@@ -140,7 +140,7 @@ mainOptionsParser = subparser
 		<*> downloadOptionsParser
 		where
 		num_leaf_threads = option refineReadM
-			( short 't'
+			( short 'w'
 			<> long "data-workers"
 			<> metavar "NUM_WORKERS"
 			<> value $$(refineTH @Positive @Int 1)
@@ -148,7 +148,7 @@ mainOptionsParser = subparser
 			<> help "Set the number of workers available for gallery data stuff, including images, thumbnails and comments"
 			)
 		num_branch_threads = option refineReadM
-			( short 'b'
+			( short 'W'
 			<> long "gallery-workers"
 			<> metavar "NUM_WORKERS"
 			<> value $$(refineTH @Positive @Int 1)
