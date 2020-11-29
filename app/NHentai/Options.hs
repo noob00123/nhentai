@@ -69,7 +69,7 @@ outputConfigParser = (mk_conf2 <|> mk_conf1) <*> output_dir
 	where
 	mk_conf1 = pure mkDefaultOutputConfig
 	mk_conf2 = flag' mkDefaultOutputConfig2
-		( short '2'
+		( short 'O'
 		<> long "output-config-2"
 		<> help "Use another directory format, instead of gid -> dest_dir/<gid>/, the directory format will become gid -> dest_dir/<div gid 1000>/<gid>"
 		)
