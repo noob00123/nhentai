@@ -32,13 +32,13 @@ import Network.HTTP.Types.Status
 import Options.Applicative
 import Refined
 import Streaming (Stream, Of)
-import System.Directory
 import System.IO (openFile)
 import System.Random
 import Text.HTML.Scalpel.Core
 import Text.URI
 import UnliftIO hiding (catch)
 import UnliftIO.Concurrent
+import UnliftIO.Directory
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as BL

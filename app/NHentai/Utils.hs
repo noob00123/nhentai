@@ -4,8 +4,6 @@ module NHentai.Utils where
 
 import Control.Error
 import Control.Exception hiding (catch, mask)
-import System.Directory
-import System.FilePath
 import Control.Lens
 import Control.Monad.Catch
 import Control.Monad.Logger
@@ -18,6 +16,8 @@ import Options.Applicative
 import Options.Applicative.Types
 import Refined
 import Streaming (Stream, Of)
+import System.FilePath
+import UnliftIO.Directory
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.List.NonEmpty as L
 import qualified Data.Text as T
@@ -84,7 +84,7 @@ uritoModernUri :: MonadThrow m => U.URI -> m URI.URI
 uritoModernUri = URI.mkURI . T.pack . show
 
 mkParentDirectoryIfMissing :: MonadIO m => FilePath -> m ()
-mkParentDirectoryIfMissing = liftIO . createDirectoryIfMissing True . takeDirectory
+mkParentDirectoryIfMissing = createDirectoryIfMissing True . takeDirectory
 
 tshow :: Show a => a -> T.Text
 tshow = T.pack . show

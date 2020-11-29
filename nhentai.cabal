@@ -67,7 +67,6 @@ executable nhentai
       aeson
     , base >=4.7 && <5
     , bytestring
-    , directory
     , errors
     , exceptions
     , filepath
