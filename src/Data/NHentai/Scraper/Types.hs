@@ -68,6 +68,12 @@ makeLenses ''ScraperGallery
 instance HasTitle ScraperGallery where
 	title = caption
 
+instance HasGalleryId ScraperGallery where
+	galleryId = scraperGalleryId
+
+instance HasMediaId ScraperGallery where
+	mediaId = scraperMediaId
+
 galleryScraper :: (Show str, StringLike str, Monad m) => ScraperT str m ScraperGallery
 galleryScraper = do
 	gid <- attr "href" ("a" @: [hasClass "cover"]) >>= extractGid

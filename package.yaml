@@ -13,20 +13,20 @@ extra-source-files:
   - CHANGELOG.md
 
 dependencies:
+  - aeson
   - base >= 4.7 && < 5
-  - text
-  - modern-uri
-  - time
-  - refined
-  - tagsoup
-  - scalpel-core
-  - lens
-  - split
   - errors
   - exceptions
+  - lens
+  - modern-uri
+  - refined
+  - scalpel-core
   - scientific
-  - aeson
+  - split
+  - tagsoup
   - template-haskell
+  - text
+  - time
 
 library:
   source-dirs: src
@@ -49,19 +49,20 @@ executables:
       - -rtsopts
       - -with-rtsopts=-N
     dependencies:
-      - nhentai
-      - streaming
       - bytestring
-      - optparse-applicative
-      - mtl
-      - monad-logger
-      - monad-control
-      - streaming-concurrency
-      - filepath
       - directory
+      - filepath
       - http-client
       - http-client-tls
       - http-types
+      - monad-logger
+      - mtl
+      - network-uri
+      - nhentai
+      - optparse-applicative
+      - random
+      - streaming
+      - unliftio
 
 tests:
   nhentai-test:

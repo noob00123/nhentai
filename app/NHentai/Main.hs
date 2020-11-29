@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -10,16 +11,16 @@
 
 module Main where
 
+import Control.Concurrent.QSem
 import Control.Error
-import Control.Lens
+import Control.Lens hiding (Context)
+import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Except
 import Control.Monad.Logger
-import Control.Monad.Trans.Control
-import Data.Aeson hiding (json)
+import Control.Monad.State
 import Data.NHentai.API.Gallery
 import Data.NHentai.Scraper.HomePage
-import Data.NHentai.Scraper.Types
 import Data.NHentai.Types
 import Data.Time
 import Data.Time.Format.ISO8601
@@ -32,208 +33,183 @@ import Options.Applicative
 import Refined
 import Streaming (Stream, Of)
 import System.Directory
-import System.FilePath
-import System.IO
+import System.IO (openFile)
+import System.Random
 import Text.HTML.Scalpel.Core
 import Text.URI
+import UnliftIO hiding (catch)
+import UnliftIO.Concurrent
+import qualified Data.Aeson as A
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
-import qualified Streaming.Concurrent as S
+import qualified Streaming as S
 import qualified Streaming.Prelude as S
 
-class HasManager a where
-	manager :: Lens' a Manager
-
-instance HasManager Manager where
-	manager = id
-
-requestFromModernURI :: (MonadLoggerIO m, MonadCatch m, MonadIO m, HasManager cfg) => cfg -> URI -> m BL.ByteString
-requestFromModernURI cfg uri = do
-	req <- parseRequest (renderStr uri)
-	let req' = req
-		{ responseTimeout = responseTimeoutNone
+data Context
+	= Context
+		{ _ctxLeafSem :: QSem
+		, _ctxBranchSem :: QSem
 		}
 
-	rep <- fix $ \loop -> do
-		rep <- (liftIO $ httpLbs req' (cfg ^. manager)) `catch` \(e :: SomeException) -> do
-			$logError $ "Redownloading, error when doing request: " <> render uri <> "\n- Error: " <> T.pack (show e)
+makeLenses ''Context
+
+initContext :: MonadIO m => Refined Positive Int -> Refined Positive Int -> m Context
+initContext leaf_threads branch_threads = Context
+	<$> (liftIO . newQSem . unrefine $ leaf_threads)
+	<*> (liftIO . newQSem . unrefine $ branch_threads)
+
+data SmartHttpState =
+	SmartHttpState
+		{ _retryCounter :: Int
+		}
+
+makeLenses ''SmartHttpState
+
+initSmartHttpState :: SmartHttpState
+initSmartHttpState = SmartHttpState 0
+
+smartHttpLbs :: (MonadCatch m, MonadLoggerIO m) => Manager -> Request -> m (Response BL.ByteString)
+smartHttpLbs mgr req = do
+	let uri_text = tshow . getUri $ req
+	$logDebug $ "Downloading " <> uri_text
+	(dt, rep) <- withTimer $ (flip evalStateT) initSmartHttpState $ fix $ \loop -> do
+		rep <- (liftIO $ httpLbs req mgr) `catch` \(e :: SomeException) -> do
+			counter <- retryCounter <+= 1
+			$logDebug $ (tshow . getUri $ req) <> " failed (Counter: " <> tshow counter <> "), retrying + reduce download speed"
+			liftIO (randomRIO (0, counter * 100000)) >>= threadDelay
 			loop
 
 		if responseStatus rep == serviceUnavailable503 then do
-			$logError $ "Redownloading, abnormal status code: 503, URI: " <> render uri
+			$logDebug $ (tshow . getUri $ req) <> " failed: Status 503, redownloading"
 			loop
 		else do
 			pure rep
+	$logDebug $ "Done downloading " <> uri_text <> ", content size: " <> tshow (BL.length . responseBody $ rep) <> ", time taken: " <> tshow dt
+	pure rep
 
-	pure $ responseBody rep
-
-getLatestGalleryId :: (MonadLoggerIO m, MonadCatch m, MonadIO m, HasManager cfg) => cfg -> m GalleryId
-getLatestGalleryId cfg = do
-	uri <- mkHomePageUri $$(refineTH 1)
-	body <- requestFromModernURI cfg uri
-	case scrapeStringLike body homePageScraper of
-		Nothing -> throwM $ ScalpelException body
-		Just home_page -> pure $ home_page ^. recentGalleries . head1 . scraperGalleryId
-
-data Config
-	= Config
-		{ _cfgManager :: Manager
-		, _cfgDownloadWarningOptions :: DownloadWarningOptions
-		, _cfgOutputConfig :: OutputConfig
-		, _cfgDownloadOptions :: DownloadOptions
-		}
-
-makeLenses ''Config
-
-instance HasDownloadWarningOptions Config where
-	downloadWarningOptions = cfgDownloadWarningOptions
-
-instance HasOutputConfig Config where
-	outputConfig = cfgOutputConfig
-
-instance HasManager Config where
-	manager = cfgManager
-
-instance HasDownloadOptions Config where
-	downloadOptions = cfgDownloadOptions
-
-data Download = Download URI FilePath
-	deriving (Show, Eq)
-
-runDownload :: (MonadCatch m, MonadLoggerIO m, HasManager cfg, HasDownloadWarningOptions cfg) => cfg -> Download -> m ()
-runDownload cfg (Download uri dest_path) = do
-	file_exist <- liftIO $ doesFileExist dest_path
-	if file_exist then do
-		$logDebug $ "Skipped downloading: " <> arrow_text <> ", file exists"
+httpThenSaveAsIfMissing :: (MonadCatch m, MonadLoggerIO m) => Manager -> FilePath -> Request -> m ()
+httpThenSaveAsIfMissing mgr file_path req = do
+	file_exists <- liftIO $ doesFileExist file_path
+	if file_exists then do
+		$logDebug $ "File " <> (T.pack file_path) <> " exists, skip downloading " <> (tshow . getUri $ req)
 	else do
-		$logDebug $ "Downloading: " <> arrow_text <> "..."
+		$logDebug $ "File " <> (T.pack file_path) <> " does not exist, saving + downloading " <> (tshow . getUri $ req)
+		rep <- smartHttpLbs mgr req
+		mkParentDirectoryIfMissing file_path
+		liftIO $ BL.writeFile file_path (responseBody rep)
 
-		(dt, body) <- withTimer $ requestFromModernURI (cfg ^. manager) uri
+readOrHttpThenSaveAsIfMissing :: (MonadCatch m, MonadLoggerIO m) => Manager -> FilePath -> Request -> m BL.ByteString
+readOrHttpThenSaveAsIfMissing mgr file_path req = do
+	file_exists <- liftIO $ doesFileExist file_path
+	if file_exists then do
+		$logDebug $ "File " <> (T.pack file_path) <> " exists, skip downloading " <> (tshow . getUri $ req)
+		liftIO $ BL.readFile file_path
+	else do
+		$logDebug $ "File " <> (T.pack file_path) <> " does not exist, saving + downloading " <> (tshow . getUri $ req)
+		rep <- smartHttpLbs mgr req
+		mkParentDirectoryIfMissing file_path
+		liftIO $ BL.writeFile file_path (responseBody rep)
+		pure $ responseBody rep
 
-		let body_length = BL.length body
-		$logDebug $ "Downloaded: " <> arrow_text <> ", took " <> T.pack (show dt) <> ", byte length: " <> T.pack (show body_length)
+getLatestGid :: (MonadCatch m, MonadLoggerIO m) => Manager -> m GalleryId 
+getLatestGid mgr = do
+	req <- mkHomePageUri $$(refineTH 1) >>= requestFromModernURI
+	body <- responseBody <$> smartHttpLbs mgr req
+	case scrapeStringLike body homePageScraper of
+		Nothing -> throwM (ScalpelException body)
+		Just home_page -> pure $ home_page ^. recentGalleries . head1 . galleryId
 
-		if_just (cfg ^. downloadWarnLeastSize) $ \least_size -> do
-			when (body_length <= unrefine least_size) $ do
-				$logWarn $ "Downloaded content's size is too small: "
-					<> T.pack (show body_length)
-					<> " (<= "
-					<> T.pack (show $ unrefine least_size)
-					<> " bytes): "
-					<> arrow_text
-					<> ", the content may be invalid or not"
-
-		if_just (cfg ^. downloadWarnMostDuration) $ \most_dt -> do
-			when (dt > most_dt) $ do
-				$logWarn $ "Downloading time took too long: "
-					<> T.pack (show dt)
-					<> " (>= "
-					<> T.pack (show most_dt)
-					<> "): "
-					<> arrow_text
-
-		liftIO $ do
-			createDirectoryIfMissing True (takeDirectory dest_path)
-			BL.writeFile dest_path body
+getGidInputStream :: (MonadUnliftIO m, MonadLoggerIO m, MonadCatch m) => GidInputOption -> S.Stream (Of GalleryId) m ()
+getGidInputStream (GidInputOptionSingle gid) = S.yield gid
+getGidInputStream (GidInputOptionListFile file_path) = do
+	h <- liftIO $ openFile file_path ReadMode
+	S.mapMaybeM parse . enumerate . S.filter (not . null) . S.fromHandle $ h
+	hClose h
 	where
-	if_just (Just v) m = m v
-	if_just Nothing _ = pure ()
-	arrow_text = render uri <> " -> " <> T.pack dest_path
-
-fetchGallery
-	::
-	( MonadCatch m
-	, MonadLoggerIO m
-	, HasOutputConfig cfg
-	, HasManager cfg
-	, HasDownloadWarningOptions cfg
-	, HasDownloadOptions cfg
-	)
-	=> cfg
-	-> GalleryId
-	-> Stream (Of Download) m ()
-fetchGallery cfg gid = do
-	gallery_api_uri <- mkGalleryApiUri gid
-
-	runDownload cfg (Download gallery_api_uri gallery_json_path)
-	body <- liftIO $ BL.readFile gallery_json_path
-
-	case eitherDecode @APIGalleryResult body of
-		Left err -> do
-			$logError $ "Unable to decode JSON from gallery: " <> T.pack (show $ unrefine gid) <> "\n- Error: " <> T.pack err <> "\n- Body: " <> T.pack (show body)
-			$logInfo $ "Redownloading " <> T.pack (show $ unrefine gid) <> "..."
-			liftIO $ removeFile gallery_json_path
-			fetchGallery cfg gid
-
-		Right (APIGalleryResultError _) -> do
-			$logWarn $ "Gallery is dead: " <> T.pack (show $ unrefine gid) <> ", skipping"
-			pure ()
-
-		Right (APIGalleryResultSuccess g) -> extractDownloads g
-	where
-	gallery_json_path = (cfg ^. jsonPathMaker) gid
-	extractDownloads g = S.for (enumerate $ S.each $ (g ^. pages)) phi
-		where
-		phi (unref_pageidx :: Int, page) = lift (refineThrow unref_pageidx) >>= \pageidx -> case page ^. eitherImageType of
-			Left string -> do
-				lift $ $logWarn $ "Image type is "
-					<> T.pack (show string)
-					<> ": Gallery: "
-					<> T.pack (show $ unrefine $ g ^. galleryId)
-					<> ", page: "
-					<> T.pack (show $ unrefine pageidx)
-					<> ", the image is probably invalid, skipping"
-				pure ()
-			Right imgtype -> do
-				let f flag_lens mk_uri path_maker_lens = when (cfg ^. flag_lens) $ do
-					uri <- lift $ mk_uri (g ^. mediaId) pageidx imgtype
-					S.yield $ Download uri ((cfg ^. path_maker_lens) (g ^. galleryId) (g ^. mediaId) pageidx imgtype)
-
-				f downloadPageThumbnailFlag mkPageThumbnailUri pageThumbPathMaker
-				f downloadPageImageFlag mkPageImageUri pageImagePathMaker
-
-runMainOptions :: (MonadMask m, MonadBaseControl IO m, MonadLoggerIO m) => MainOptions -> m ()
-runMainOptions (MainOptionsDownload {..}) = do
-	mgr <- newTlsManager
-	let cfg = Config
-		{ _cfgManager = mgr
-		, _cfgOutputConfig = outputConfig'MainOptionsDownload
-		, _cfgDownloadOptions = downloadOptions'MainOptionsDownload
-		, _cfgDownloadWarningOptions = downloadWarningOptions'MainOptionsDownload
-		}
-	dt <- withTimer_ $ run cfg gidInputOption'MainOptionsDownload
-	$logInfo $ "Done downloading all galleries! Time taken: " <> T.pack (show dt)
-	where
-	run cfg (GidInputOptionSingle gid) = download_gids cfg (S.yield gid)
-	run cfg (GidInputOptionListFile file_path) = do
-		bracket (liftIO $ openFile file_path ReadMode) (liftIO . hClose) $ \h -> do
-			let gid_stream = S.mapMaybeM parse $ enumerate $ S.filter (not . null) $ S.fromHandle $ h
-			download_gids cfg gid_stream
-		where
-		parse (line_at :: Integer, string) = case readMay string of
-			Nothing -> do
-				$logWarn $ prefix <> "Unable to parse " <> T.pack (show string) <> " as a gallery id, skipping"
+	parse (line_at :: Integer, string) = case readMay string of
+		Nothing -> do
+			$logError $ prefix <> "Unable to parse " <> T.pack (show string) <> " as a gallery id, skipping"
+			pure Nothing
+		Just unref_gid -> case refineThrow unref_gid of
+			Left err -> do
+				$logError $ prefix <> "Unable to refine " <> T.pack (show unref_gid) <> " to a gallery id, skipping. Error: " <> T.pack (show err)
 				pure Nothing
-			Just unref_gid -> case refineThrow unref_gid of
-				Left err -> do
-					$logError $ prefix <> "Unable to refine " <> T.pack (show unref_gid) <> " to a gallery id, skipping. Error: " <> T.pack (show err)
-					pure Nothing
-				Right gid -> pure $ Just (gid :: GalleryId)
-			where
-			prefix = "In " <> T.pack file_path <> ":" <> T.pack (show line_at) <> ": "
-	download_gids cfg gid_stream = do
-		S.withStreamMapM
-			(unrefine numThreads'MainOptionsDownload)
-			(runDownload cfg)
-			(S.for gid_stream (fetchGallery cfg))
-			S.effects
+			Right gid -> pure $ Just (gid :: GalleryId)
+		where
+		prefix = "In " <> T.pack file_path <> ":" <> T.pack (show line_at) <> ": "
 
+asyncLeaf :: (MonadUnliftIO m) => Context -> m a -> m (Async a)
+asyncLeaf ctx f = async $ do
+	liftIO $ waitQSem (ctx ^. ctxLeafSem)
+	a <- f
+	liftIO $ signalQSem (ctx ^. ctxLeafSem)
+	pure a
+
+downloadPagesWith :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m)
+	=> (MediaId -> PageIndex -> ImageType -> m URI)
+	-> (Lens' OutputConfig (GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath))
+	-> Context
+	-> OutputConfig
+	-> Manager
+	-> ApiGallery
+	-> Stream (Of (Async ())) m ()
+downloadPagesWith url_maker maker_lens ctx out_cfg mgr g = loop $$(refineTH 1) (g ^. pages)
+	where
+	loop _ [] = pure ()
+	loop pid (page:pages) = lift (refineThrow $ unrefine pid + 1) >>= \pid' -> case page ^. eitherImageType of
+		Left ext -> do
+			lift $ $logError $ "Gallery " <> (tshow . unrefine $ g ^. galleryId) <> ", page " <> (tshow . unrefine $ pid) <> " has invalid image type: " <> tshow ext <> ", skipping"
+		Right imgtype -> do
+			req <- lift $ url_maker (g ^. mediaId) pid imgtype >>= requestFromModernURI
+			let file_path = (out_cfg ^. maker_lens) (g ^. galleryId) (g ^. mediaId) pid imgtype
+			lift (asyncLeaf ctx $ httpThenSaveAsIfMissing mgr file_path req) >>= S.yield
+			loop pid' pages
+
+
+downloadPageThumbnails :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
+downloadPageThumbnails = downloadPagesWith mkPageThumbnailUri pageThumbnailPathMaker
+
+downloadPageImages :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
+downloadPageImages = downloadPagesWith mkPageImageUri pageImagePathMaker
+
+downloadGalleries :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> DownloadOptions -> Manager -> S.Stream (Of GalleryId) m () -> m ()
+downloadGalleries ctx out_cfg down_opts mgr stream = S.uncons stream >>= \case
+	Nothing -> pure ()
+	Just (gid, stream') -> do
+		liftIO $ waitQSem (ctx ^. ctxBranchSem)
+		remaining_tasks <- async $ downloadGalleries ctx out_cfg down_opts mgr stream'
+
+		$logInfo $ "Fetching gallery " <> (tshow . unrefine $ gid)
+		g_req <- mkApiGalleryUri gid >>= requestFromModernURI
+		tasks <- A.eitherDecode <$> readOrHttpThenSaveAsIfMissing mgr (out_cfg ^. jsonPathMaker $ gid) g_req >>= \case
+			Left _ -> pure []
+			Right (ApiGalleryResultError err) -> do
+				$logError $ "Gallery " <> (tshow . unrefine $ gid) <> " gives out an error: " <> tshow err
+				pure []
+			Right (ApiGalleryResultSuccess g) -> S.toList_ $ do
+				when (down_opts ^. downloadPageThumbnailFlag) $ downloadPageThumbnails ctx out_cfg mgr g
+				when (down_opts ^. downloadPageImageFlag) $ downloadPageImages ctx out_cfg mgr g
+
+		liftIO $ signalQSem (ctx ^. ctxBranchSem)
+
+		dt <- withTimer_ (forM_ tasks wait)
+		$logInfo $ "Done fetching gallery " <> (tshow . unrefine $ gid) <> ", time taken: " <> tshow dt
+
+		wait remaining_tasks
+
+runMainOptions :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => MainOptions -> m ()
 runMainOptions MainOptionsVersion = liftIO $ putStrLn "0.1.3.0"
 runMainOptions MainOptionsLatestGid = do
 	mgr <- newTlsManager
-	latest_gid <- getLatestGalleryId mgr
-	liftIO $ putStrLn $ show (unrefine latest_gid)
+	latest_gid <- getLatestGid mgr
+	liftIO $ print (unrefine latest_gid)
+runMainOptions (MainOptionsDownload {..}) = do
+	mgr <- newTlsManager
+	ctx <- initContext mainOptNumLeafThreads mainOptNumBranchThreads
+	let gid_stream = getGidInputStream mainOptGidInputOption
+	dt <- withTimer_ $ downloadGalleries ctx mainOptOutputConfig mainOptDownloadOptions mgr gid_stream
+	$logInfo $ "Finished! Time taken: " <> tshow dt
 
 main :: IO ()
 main = do

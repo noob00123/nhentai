@@ -4,8 +4,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Data.NHentai.API.Comment
-( mkCommentApiUri
-, APIPoster(..)
+( mkApiCommentUri
+, ApiPoster(..)
 , posterId
 , posterUsername
 , posterSlug
@@ -13,7 +13,7 @@ module Data.NHentai.API.Comment
 , posterIsSuperUser
 , posterIsStaff
 
-, APIComment(..)
+, ApiComment(..)
 , commentId
 , commentGalleryId
 , commentPoster
@@ -25,7 +25,7 @@ where
 import Control.Lens
 import Control.Monad.Catch
 import Data.Aeson
-import Data.NHentai.API.Gallery (mkGalleryApiUri)
+import Data.NHentai.API.Gallery
 import Data.NHentai.Internal.Utils
 import Data.NHentai.Types
 import Data.Time.Clock
@@ -36,13 +36,13 @@ import Text.URI.Lens
 import Text.URI.QQ
 import qualified Data.Text as T
 
-mkCommentApiUri :: MonadThrow m => GalleryId -> m URI
-mkCommentApiUri gid = do
-	uri <- mkGalleryApiUri gid
+mkApiCommentUri :: MonadThrow m => GalleryId -> m URI
+mkApiCommentUri gid = do
+	uri <- mkApiGalleryUri gid
 	pure $ uri & uriPath %~ (<> [[pathPiece|comments|]])
 
-data APIPoster
-	= APIPoster
+data ApiPoster
+	= ApiPoster
 		{ _posterId :: PosterId
 		, _posterUsername :: T.Text
 		, _posterSlug :: T.Text
@@ -52,10 +52,10 @@ data APIPoster
 		}
 	deriving (Show, Eq)
 
-makeLensesWith (classyRules & lensClass .~ const (Just (mkName "HasAPIPoster", mkName "apiPoster"))) ''APIPoster
+makeLensesWith (classyRules & lensClass .~ const (Just (mkName "HasApiPoster", mkName "apiPoster"))) ''ApiPoster
 
-instance FromJSON APIPoster where
-	parseJSON = withObject "APIPoster" $ \v -> APIPoster
+instance FromJSON ApiPoster where
+	parseJSON = withObject "ApiPoster" $ \v -> ApiPoster
 		<$> (v .: "id" >>= refineFail)
 		<*> v .: "username"
 		<*> v .: "slug"
@@ -63,23 +63,23 @@ instance FromJSON APIPoster where
 		<*> v .: "is_superuser"
 		<*> v .: "is_staff"
 
-data APIComment
-	= APIComment
+data ApiComment
+	= ApiComment
 		{ _commentId :: CommentId
 		, _commentGalleryId :: GalleryId
-		, _commentPoster :: APIPoster
+		, _commentPoster :: ApiPoster
 		, _commentPostDate :: UTCTime
 		, _commentBody :: T.Text
 		}
 	deriving (Show, Eq)
 
-makeLenses ''APIComment
+makeLenses ''ApiComment
 
-instance HasAPIPoster APIComment where
+instance HasApiPoster ApiComment where
 	apiPoster = commentPoster
 
-instance FromJSON APIComment where
-	parseJSON = withObject "APIComment" $ \v -> APIComment
+instance FromJSON ApiComment where
+	parseJSON = withObject "ApiComment" $ \v -> ApiComment
 		<$> (v .: "id" >>= refineFail)
 		<*> (v .: "gallery_id" >>= refineFail)
 		<*> v .: "poster"

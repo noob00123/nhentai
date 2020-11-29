@@ -5,9 +5,7 @@ module NHentai.Options where
 
 import Control.Lens
 import Control.Monad.Logger
-import Data.Int
 import Data.NHentai.Types
-import Data.Time.Clock.POSIX
 import NHentai.Utils
 import Options.Applicative
 import Refined
@@ -38,35 +36,10 @@ downloadOptionsParser = DownloadOptions
 		<> help "Download page images of a gallery"
 		)
 
-data DownloadWarningOptions
-	= DownloadWarningOptions
-		{ _downloadWarnLeastSize :: Maybe (Refined NonNegative Int64)
-		, _downloadWarnMostDuration :: Maybe POSIXTime
-		}
-	deriving (Show, Eq)
-
-makeClassy ''DownloadWarningOptions
-
-downloadWarningOptionsParser :: Parser DownloadWarningOptions
-downloadWarningOptionsParser = DownloadWarningOptions
-	<$> ((Just <$> warn_least_size_parser) <|> pure Nothing)
-	<*> ((Just <$> warn_most_duration_parser) <|> pure Nothing)
-	where
-	warn_least_size_parser = option refineReadM
-		( long "warn-least-size"
-		<> metavar "NUM_BYTES"
-		<> help "Set downloaded content's size threshold before warning"
-		)
-	warn_most_duration_parser = fmap (realToFrac . unrefine) $ option (refineReadM @Double @NonNegative)
-		( long "warn-most-duration"
-		<> metavar "DURATION"
-		<> help "Set download duration threshold before warning"
-		)
-
 data OutputConfig
 	= OutputConfig
 		{ _jsonPathMaker :: GalleryId -> FilePath
-		, _pageThumbPathMaker :: GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath
+		, _pageThumbnailPathMaker :: GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath
 		, _pageImagePathMaker :: GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath
 		}
 
@@ -75,7 +48,7 @@ makeClassy ''OutputConfig
 simpleOutputConfig :: (GalleryId -> FilePath) -> OutputConfig
 simpleOutputConfig prefix = OutputConfig
 	{ _jsonPathMaker = \gid -> prefix gid </> "gallery.json"
-	, _pageThumbPathMaker = \gid _ pid img_type -> prefix gid </> (show (unrefine pid) <> "t." <> extension # img_type)
+	, _pageThumbnailPathMaker = \gid _ pid img_type -> prefix gid </> (show (unrefine pid) <> "t." <> extension # img_type)
 	, _pageImagePathMaker = \gid _ pid img_type -> prefix gid </> (show (unrefine pid) <> "." <> extension # img_type)
 	}
 
@@ -111,10 +84,10 @@ outputConfigParser = (mk_conf2_parser <|> mk_conf1_parser) <*> output_dir_parser
 
 data GidInputOption
 	= GidInputOptionSingle
-		{ galleryId'GidInputOptionSingle :: GalleryId
+		{ _gidOptGalleryId :: GalleryId
 		}
 	| GidInputOptionListFile
-		{ filePath'GidInputOptionListFile :: FilePath
+		{ _gidOptFilePath :: FilePath
 		}
 	deriving (Show, Eq)
 
@@ -138,11 +111,11 @@ gidInputOptionParser = single_parser <|> list_file_parser
 
 data MainOptions
 	= MainOptionsDownload
-		{ gidInputOption'MainOptionsDownload :: GidInputOption
-		, numThreads'MainOptionsDownload :: Refined Positive Int
-		, outputConfig'MainOptionsDownload :: OutputConfig
-		, downloadWarningOptions'MainOptionsDownload :: DownloadWarningOptions
-		, downloadOptions'MainOptionsDownload :: DownloadOptions
+		{ mainOptGidInputOption :: GidInputOption
+		, mainOptNumLeafThreads :: Refined Positive Int
+		, mainOptNumBranchThreads :: Refined Positive Int
+		, mainOptOutputConfig :: OutputConfig
+		, mainOptDownloadOptions :: DownloadOptions
 		}
 	| MainOptionsVersion
 	| MainOptionsLatestGid
@@ -154,26 +127,33 @@ mainOptionsParser = subparser
 	<> main_latest_gid_command
 	)
 	where
-	main_download_command = command "download" $
-		info (main_download_option <**> helper)
-			( fullDesc
-			<> progDesc "Download pages of galleries"
-			)
+	main_download_command = command "download" $ info (main_download_option <**> helper)
+		( fullDesc
+		<> progDesc "Download pages of galleries"
+		)
 
 	main_download_option = MainOptionsDownload
 		<$> gidInputOptionParser
-		<*> num_threads_parser
+		<*> num_leaf_threads_parser
+		<*> num_branch_threads_parser
 		<*> outputConfigParser
-		<*> downloadWarningOptionsParser
 		<*> downloadOptionsParser
 		where
-		num_threads_parser = option refineReadM
+		num_leaf_threads_parser = option refineReadM
 			( short 't'
-			<> long "threads"
+			<> long "leaf-threads"
 			<> metavar "NUM_THREADS"
 			<> value $$(refineTH @Positive @Int 1)
 			<> showDefault
-			<> help "Set the number of threads used in downloading pages"
+			<> help "Set the number of threads used in downloading"
+			)
+		num_branch_threads_parser = option refineReadM
+			( short 'b'
+			<> long "branch-threads"
+			<> metavar "NUM_THREADS"
+			<> value $$(refineTH @Positive @Int 1)
+			<> showDefault
+			<> help "Set the number of threads used in downloading"
 			)
 
 	main_version_command = command "version" $ do

@@ -5,20 +5,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Data.NHentai.API.Gallery
-( mkGalleryApiUri
+( mkApiGalleryUri
 , mkPageThumbnailUri
 , mkPageImageUri
 
 , toTagType
 
-, APITag(..)
+, ApiTag(..)
 , tagId
 , tagType
 , tagName
 , tagUri
 , tagCount
 
-, APIGallery(..)
+, ApiGallery(..)
 , apiGalleryId
 , apiMediaId
 , titleEnglish
@@ -33,7 +33,7 @@ module Data.NHentai.API.Gallery
 , numPages
 , numFavorites
 
-, APIGalleryResult(..)
+, ApiGalleryResult(..)
 )
 where
 
@@ -55,8 +55,8 @@ import Text.URI.Lens
 import Text.URI.QQ
 import qualified Data.Text as T
 
-mkGalleryApiUri :: MonadThrow m => GalleryId -> m URI
-mkGalleryApiUri gid = do
+mkApiGalleryUri :: MonadThrow m => GalleryId -> m URI
+mkApiGalleryUri gid = do
 	gid_path_piece <- mkPathPiece (show (unrefine gid) ^. packed)
 	pure $ prefix & uriPath %~ (<> [gid_path_piece])
 	where
@@ -65,39 +65,39 @@ mkGalleryApiUri gid = do
 toTagType :: String -> Maybe TagType
 toTagType str = readMay (capitalize str <> "Tag")
 
-newtype APITagType = APITagType { unAPITagType :: TagType } deriving (Show, Eq)
+newtype ApiTagType = ApiTagType { unApiTagType :: TagType } deriving (Show, Eq)
 
-instance FromJSON APITagType where
-	parseJSON = withText "APITagType" $ \v -> do
+instance FromJSON ApiTagType where
+	parseJSON = withText "ApiTagType" $ \v -> do
 		let v' = T.unpack v
 		case toTagType v' of
-			Just j -> pure $ APITagType j
+			Just j -> pure $ ApiTagType j
 			Nothing -> fail $ "unknown tag type: " <> show v'
 
 -- e.g. https://i.nhentai.net/galleries/900513/2.00 https://nhentai.net/api/gallery/155974
 -- e.g. https://nhentai.net/g/155844/24/
-newtype APIImageType = APIImageType { unAPIImageType :: Either String ImageType } deriving (Show, Eq)
+newtype ApiImageType = ApiImageType { unApiImageType :: Either String ImageType } deriving (Show, Eq)
 
-instance FromJSON APIImageType where
-	parseJSON = withText "APIImageType" $ \string_packed -> do
+instance FromJSON ApiImageType where
+	parseJSON = withText "ApiImageType" $ \string_packed -> do
 		let string = T.unpack string_packed
 		case headMay string of
 			Nothing -> fail $ "image type string is empty"
 			Just ch -> case ch ^? extensionChar of
-				Nothing -> pure . APIImageType . Left $ string
-				Just image_type -> pure . APIImageType . Right $ image_type
+				Nothing -> pure . ApiImageType . Left $ string
+				Just image_type -> pure . ApiImageType . Right $ image_type
 
-newtype APIImageSpec = APIImageSpec { unAPIImageSpec :: ImageSpec } deriving (Show, Eq)
+newtype ApiImageSpec = ApiImageSpec { unApiImageSpec :: ImageSpec } deriving (Show, Eq)
 
-instance FromJSON APIImageSpec where
-	parseJSON = withObject "APIImageSpec" $ \v -> do
-		APIImageSpec <$> (ImageSpec
-			<$> (unAPIImageType <$> v .: "t")
+instance FromJSON ApiImageSpec where
+	parseJSON = withObject "ApiImageSpec" $ \v -> do
+		ApiImageSpec <$> (ImageSpec
+			<$> (unApiImageType <$> v .: "t")
 			<*> (v .: "w" >>= refineFail)
 			<*> (v .: "h" >>= refineFail))
 
-data APITag
-	= APITag
+data ApiTag
+	= ApiTag
 		{ _tagId :: TagId
 		, _tagType :: TagType
 		, _tagName :: T.Text
@@ -106,18 +106,18 @@ data APITag
 		}
 	deriving (Show, Eq)
 
-makeLenses ''APITag
+makeLenses ''ApiTag
 
-instance FromJSON APITag where
-	parseJSON = withObject "APITag" $ \v -> APITag
+instance FromJSON ApiTag where
+	parseJSON = withObject "ApiTag" $ \v -> ApiTag
 		<$> (v .: "id")
-		<*> (unAPITagType <$> v .: "type")
+		<*> (unApiTagType <$> v .: "type")
 		<*> v .: "name"
 		<*> (v .: "url" >>= mkURIFail)
 		<*> v .: "count"
 
-data APIGallery
-	= APIGallery
+data ApiGallery
+	= ApiGallery
 		{ _apiGalleryId :: GalleryId
 		, _apiMediaId :: MediaId
 		, _titleEnglish :: T.Text
@@ -128,18 +128,18 @@ data APIGallery
 		, _thumbnail :: ImageSpec
 		, _scanlator :: T.Text
 		, _uploadDate :: UTCTime
-		, _tags :: [APITag]
+		, _tags :: [ApiTag]
 		, _numPages :: PageIndex
 		, _numFavorites :: Refined NonNegative Int
 		}
 	deriving (Show, Eq)
 
-makeLenses ''APIGallery
+makeLenses ''ApiGallery
 
-instance HasGalleryId APIGallery where
+instance HasGalleryId ApiGallery where
 	galleryId = apiGalleryId
 
-instance HasMediaId APIGallery where
+instance HasMediaId ApiGallery where
 	mediaId = apiMediaId
 
 mkPageThumbnailUri :: MonadThrow m => MediaId -> PageIndex -> ImageType -> m URI
@@ -165,26 +165,26 @@ intOrString (Number i) = case floatingOrInteger @Float i of
 intOrString (String x) = readZ (x ^. unpacked)
 intOrString _ = fail "neither a String or a Number Int"
 
-data APIGalleryResult
-	= APIGalleryResultSuccess APIGallery
-	| APIGalleryResultError T.Text
+data ApiGalleryResult
+	= ApiGalleryResultSuccess ApiGallery
+	| ApiGalleryResultError T.Text
 	deriving (Show, Eq)
 
-instance FromJSON APIGalleryResult where
-	parseJSON = withObject "APIGalleryResult" $ \v -> error_parser v <|> api_gallery_parser v
+instance FromJSON ApiGalleryResult where
+	parseJSON = withObject "ApiGalleryResult" $ \v -> error_parser v <|> api_gallery_parser v
 		where
-		error_parser v = APIGalleryResultError
+		error_parser v = ApiGalleryResultError
 			<$> (v .: "error")
-		api_gallery_parser v = APIGalleryResultSuccess <$>
-			( APIGallery
+		api_gallery_parser v = ApiGalleryResultSuccess <$>
+			( ApiGallery
 			<$> (v .: "id" >>= intOrString >>= refineFail)
 			<*> (v .: "media_id" >>= intOrString >>= refineFail)
 			<*> (v .: "title" >>= (.: "english"))
 			<*> (v .: "title" >>= (.: "japanese"))
 			<*> (v .: "title" >>= (.: "pretty"))
-			<*> (fmap unAPIImageSpec <$> (v .: "images" >>= (.: "pages")))
-			<*> (unAPIImageSpec <$> (v .: "images" >>= (.: "cover")))
-			<*> (unAPIImageSpec <$> (v .: "images" >>= (.: "thumbnail")))
+			<*> (fmap unApiImageSpec <$> (v .: "images" >>= (.: "pages")))
+			<*> (unApiImageSpec <$> (v .: "images" >>= (.: "cover")))
+			<*> (unApiImageSpec <$> (v .: "images" >>= (.: "thumbnail")))
 			<*> v .: "scanlator"
 			<*> (secondsToUTCTime <$> (v .: "upload_date"))
 			<*> v .: "tags"
