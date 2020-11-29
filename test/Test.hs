@@ -40,23 +40,23 @@ tests = testGroup "NHentai"
 
 httpJson :: FromJSON a => String -> IO (Either String a)
 httpJson uri = do
-	mgr <- newManager tlsManagerSettings
+	mgr <- newTlsManager
 	req <- parseRequest uri
 	rep <- httpLbs req mgr
 	pure $ eitherDecode (responseBody rep)
 
 testGalleryApi :: GalleryId -> TestTree
 testGalleryApi gid = testCase ("api/gallery/" <> show (unrefine gid)) $ do
-	uri <- mkGalleryApiUri gid
-	httpJson @APIGalleryResult (renderStr uri) >>= \case
-		Right (APIGalleryResultError _) -> assertFailure $ "Gallery is dead"
-		Right (APIGalleryResultSuccess _) -> pure ()
+	uri <- mkApiGalleryUri gid
+	httpJson @ApiGalleryResult (renderStr uri) >>= \case
+		Right (ApiGalleryResultError _) -> assertFailure $ "Gallery is dead"
+		Right (ApiGalleryResultSuccess _) -> pure ()
 		Left err -> assertFailure $ "Fail to parse json: " <> show err
 
 testCommentApi :: GalleryId -> TestTree
 testCommentApi gid = testCase ("api/gallery/" <> show (unrefine gid) <> "/comments") $ do
-	uri <- mkCommentApiUri gid
-	httpJson @[APIComment] (renderStr uri) >>= \case
+	uri <- mkApiCommentUri gid
+	httpJson @[ApiComment] (renderStr uri) >>= \case
 		Right _ -> pure ()
 		Left err -> assertFailure $ "Fail to parse json: " <> show err
 
