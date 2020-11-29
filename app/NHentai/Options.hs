@@ -141,7 +141,7 @@ mainOptionsParser = subparser
 		where
 		num_leaf_threads = option refineReadM
 			( short 't'
-			<> long "leaf-workers"
+			<> long "data-workers"
 			<> metavar "NUM_WORKERS"
 			<> value $$(refineTH @Positive @Int 1)
 			<> showDefault
