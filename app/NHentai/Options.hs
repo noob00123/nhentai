@@ -141,19 +141,19 @@ mainOptionsParser = subparser
 		where
 		num_leaf_threads = option refineReadM
 			( short 't'
-			<> long "leaf-threads"
-			<> metavar "NUM_THREADS"
+			<> long "leaf-workers"
+			<> metavar "NUM_WORKERS"
 			<> value $$(refineTH @Positive @Int 1)
 			<> showDefault
-			<> help "Set the number of threads used in downloading"
+			<> help "Set the number of workers available for gallery data stuff, including images, thumbnails and comments"
 			)
 		num_branch_threads = option refineReadM
 			( short 'b'
-			<> long "branch-threads"
-			<> metavar "NUM_THREADS"
+			<> long "gallery-workers"
+			<> metavar "NUM_WORKERS"
 			<> value $$(refineTH @Positive @Int 1)
 			<> showDefault
-			<> help "Set the number of threads used in downloading"
+			<> help "Set the number of workers available for downloading gallery api JSONs concurrently"
 			)
 
 	main_version_command = command "version" $ do
