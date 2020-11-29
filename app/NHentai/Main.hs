@@ -182,7 +182,7 @@ downloadGalleries ctx out_cfg down_opts mgr stream = S.uncons stream >>= \case
 
 		$logInfo $ "Fetching gallery " <> (tshow . unrefine $ gid)
 		g_req <- mkApiGalleryUri gid >>= requestFromModernURI
-		tasks <- A.eitherDecode <$> readOrHttpThenSaveAsIfMissing mgr (out_cfg ^. jsonPathMaker $ gid) g_req >>= \case
+		tasks <- A.eitherDecode <$> readOrHttpThenSaveAsIfMissing mgr (out_cfg ^. galleryApiJsonPathMaker $ gid) g_req >>= \case
 			Left _ -> pure []
 			Right (ApiGalleryResultError err) -> do
 				$logError $ "Gallery " <> (tshow . unrefine $ gid) <> " gives out an error: " <> tshow err

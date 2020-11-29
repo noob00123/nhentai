@@ -38,7 +38,7 @@ downloadOptionsParser = DownloadOptions
 
 data OutputConfig
 	= OutputConfig
-		{ _jsonPathMaker :: GalleryId -> FilePath
+		{ _galleryApiJsonPathMaker :: GalleryId -> FilePath
 		, _pageThumbnailPathMaker :: GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath
 		, _pageImagePathMaker :: GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath
 		}
@@ -47,7 +47,7 @@ makeClassy ''OutputConfig
 
 simpleOutputConfig :: (GalleryId -> FilePath) -> OutputConfig
 simpleOutputConfig prefix = OutputConfig
-	{ _jsonPathMaker = \gid -> prefix gid </> "gallery.json"
+	{ _galleryApiJsonPathMaker = \gid -> prefix gid </> "gallery.json"
 	, _pageThumbnailPathMaker = \gid _ pid img_type -> prefix gid </> (show (unrefine pid) <> "t." <> extension # img_type)
 	, _pageImagePathMaker = \gid _ pid img_type -> prefix gid </> (show (unrefine pid) <> "." <> extension # img_type)
 	}
@@ -65,10 +65,9 @@ mkDefaultOutputConfig2 :: FilePath -> OutputConfig
 mkDefaultOutputConfig2 output_dir = simpleOutputConfig $ \gid -> let unref_gid = unrefine gid in output_dir </> show (unref_gid `div` 1000) </> show unref_gid
 
 outputConfigParser :: Parser OutputConfig
-outputConfigParser = (mk_conf2 <|> mk_conf1) <*> output_dir
+outputConfigParser = (mk_conf_2 <|> pure mkDefaultOutputConfig) <*> output_dir
 	where
-	mk_conf1 = pure mkDefaultOutputConfig
-	mk_conf2 = flag' mkDefaultOutputConfig2
+	mk_conf_2 = flag' mkDefaultOutputConfig2
 		( short 'O'
 		<> long "output-config-2"
 		<> help "Use another directory format, instead of gid -> dest_dir/<gid>/, the directory format will become gid -> dest_dir/<div gid 1000>/<gid>"
@@ -83,12 +82,8 @@ outputConfigParser = (mk_conf2 <|> mk_conf1) <*> output_dir
 		)
 
 data GidInputOption
-	= GidInputOptionSingle
-		{ _gidOptGalleryId :: GalleryId
-		}
-	| GidInputOptionListFile
-		{ _gidOptFilePath :: FilePath
-		}
+	= GidInputOptionSingle GalleryId
+	| GidInputOptionListFile FilePath
 	deriving (Show, Eq)
 
 gidInputOptionParser :: Parser GidInputOption
@@ -121,17 +116,9 @@ data MainOptions
 	| MainOptionsLatestGid
 
 mainOptionsParser :: Parser MainOptions
-mainOptionsParser = subparser
-	( main_download_command
-	<> main_version_command
-	<> main_latest_gid_command
-	)
+mainOptionsParser = subparser $ main_download_command <> main_version_command <> main_latest_gid_command
 	where
-	main_download_command = command "download" $ info (main_download_option <**> helper)
-		( fullDesc
-		<> progDesc "Download pages of galleries"
-		)
-
+	main_download_command = command "download" $ info (main_download_option <**> helper) ( fullDesc <> progDesc "Download pages of galleries")
 	main_download_option = MainOptionsDownload
 		<$> gidInputOptionParser
 		<*> num_leaf_threads
