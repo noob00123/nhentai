@@ -92,7 +92,7 @@ outputConfigParser = (mk_conf_2 <|> pure mkDefaultOutputConfig) <*> output_dir
 		( short 'o'
 		<> long "output-dir"
 		<> metavar "OUTPUT_DIR"
-		<> value "galleries"
+		<> value "."
 		<> showDefault
 		<> help "Set the output directory"
 		)
