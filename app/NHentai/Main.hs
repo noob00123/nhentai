@@ -95,8 +95,8 @@ smartHttpLbs mgr req = do
 	$logDebug $ "Done downloading " <> uri_text <> ", content size: " <> tshow (BL.length . responseBody $ rep) <> ", time taken: " <> tshow dt
 	pure rep
 
-httpThenSaveAsIfMissing :: (MonadCatch m, MonadLoggerIO m) => Manager -> FilePath -> Request -> m ()
-httpThenSaveAsIfMissing mgr file_path req = do
+downloadIfMissing :: (MonadCatch m, MonadLoggerIO m) => FilePath -> Manager -> Request -> m ()
+downloadIfMissing file_path mgr req = do
 	file_exists <- liftIO $ doesFileExist file_path
 	if file_exists then do
 		$logDebug $ "File " <> (T.pack file_path) <> " exists, skip downloading " <> (tshow . getUri $ req)
@@ -106,18 +106,23 @@ httpThenSaveAsIfMissing mgr file_path req = do
 		mkParentDirectoryIfMissing file_path
 		liftIO $ BL.writeFile file_path (responseBody rep)
 
-readOrHttpThenSaveAsIfMissing :: (MonadCatch m, MonadLoggerIO m) => Manager -> FilePath -> Request -> m BL.ByteString
-readOrHttpThenSaveAsIfMissing mgr file_path req = do
+httpCached :: (MonadCatch m, MonadLoggerIO m) => FilePath -> Bool -> Manager -> Request -> m BL.ByteString
+httpCached file_path save mgr req = do
 	file_exists <- liftIO $ doesFileExist file_path
 	if file_exists then do
 		$logDebug $ "File " <> (T.pack file_path) <> " exists, skip downloading " <> (tshow . getUri $ req)
 		liftIO $ BL.readFile file_path
 	else do
-		$logDebug $ "File " <> (T.pack file_path) <> " does not exist, saving + downloading " <> (tshow . getUri $ req)
+		if save then
+			$logDebug $ "File " <> (T.pack file_path) <> " does not exist, saving + downloading " <> (tshow . getUri $ req)
+		else
+			$logDebug $ "File " <> (T.pack file_path) <> " does not exist, downloading " <> (tshow . getUri $ req)
 		rep <- smartHttpLbs mgr req
-		mkParentDirectoryIfMissing file_path
-		liftIO $ BL.writeFile file_path (responseBody rep)
-		pure $ responseBody rep
+		let body = responseBody rep
+		when save $ do
+			mkParentDirectoryIfMissing file_path
+			liftIO $ BL.writeFile file_path body
+		pure $ body
 
 getLatestGid :: (MonadCatch m, MonadLoggerIO m) => Manager -> m GalleryId 
 getLatestGid mgr = do
@@ -161,16 +166,16 @@ downloadPagesWith url_maker maker_lens ctx out_cfg mgr g = loop $$(refineTH 1) (
 		Left ext -> do
 			lift $ $logError $ "Gallery " <> (tshow . unrefine $ g ^. galleryId) <> ", page " <> (tshow . unrefine $ pid) <> " has invalid image type: " <> tshow ext <> ", skipping"
 		Right imgtype -> do
-			req <- lift $ url_maker (g ^. mediaId) pid imgtype >>= requestFromModernURI
 			let file_path = (out_cfg ^. maker_lens) (g ^. galleryId) (g ^. mediaId) pid imgtype
-			lift (asyncLeaf ctx $ httpThenSaveAsIfMissing mgr file_path req) >>= S.yield
+			req <- lift $ url_maker (g ^. mediaId) pid imgtype >>= requestFromModernURI
+			lift (asyncLeaf ctx $ downloadIfMissing file_path mgr req) >>= S.yield
 			loop pid' pages
 
-downloadPageThumbnails :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
-downloadPageThumbnails = downloadPagesWith mkPageThumbnailUri pageThumbnailPathMaker
+downloadPageThumbnailsLeafs :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
+downloadPageThumbnailsLeafs = downloadPagesWith mkPageThumbnailUri pageThumbnailPathMaker
 
-downloadPageImages :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
-downloadPageImages = downloadPagesWith mkPageImageUri pageImagePathMaker
+downloadPageImagesLeafs :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
+downloadPageImagesLeafs = downloadPagesWith mkPageImageUri pageImagePathMaker
 
 downloadGalleries :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> DownloadOptions -> Manager -> S.Stream (Of GalleryId) m () -> m ()
 downloadGalleries ctx out_cfg down_opts mgr stream = S.uncons stream >>= \case
@@ -179,22 +184,22 @@ downloadGalleries ctx out_cfg down_opts mgr stream = S.uncons stream >>= \case
 		liftIO $ waitQSem (ctx ^. ctxBranchSem)
 		remaining_tasks <- async $ downloadGalleries ctx out_cfg down_opts mgr stream'
 
-		$logInfo $ "Fetching gallery " <> (tshow . unrefine $ gid)
-		g_req <- mkApiGalleryUri gid >>= requestFromModernURI
-		tasks <- A.eitherDecode <$> readOrHttpThenSaveAsIfMissing mgr (out_cfg ^. galleryApiJsonPathMaker $ gid) g_req >>= \case
-			Left _ -> pure []
-			Right (ApiGalleryResultError err) -> do
-				$logError $ "Gallery " <> (tshow . unrefine $ gid) <> " gives out an error: " <> tshow err
-				pure []
-			Right (ApiGalleryResultSuccess g) -> S.toList_ $ do
-				when (down_opts ^. downloadPageThumbnailFlag) $ downloadPageThumbnails ctx out_cfg mgr g
-				when (down_opts ^. downloadPageImageFlag) $ downloadPageImages ctx out_cfg mgr g
+		dt <- withTimer_ $ do
+			$logInfo $ "Fetching gallery " <> (tshow . unrefine $ gid)
+			let g_json_path = gid & (out_cfg ^. galleryApiJsonPathMaker)
+			g_req <- mkApiGalleryUri gid >>= requestFromModernURI
+			tasks <- A.eitherDecode <$> httpCached g_json_path (down_opts ^. saveApiGalleryInfoFlag) mgr g_req >>= \case
+				Left _ -> pure []
+				Right (ApiGalleryResultError err) -> do
+					$logError $ "Gallery " <> (tshow . unrefine $ gid) <> " gives out an error: " <> tshow err
+					pure []
+				Right (ApiGalleryResultSuccess g) -> S.toList_ $ do
+					when (down_opts ^. downloadPageThumbnailFlag) $ downloadPageThumbnailsLeafs ctx out_cfg mgr g
+					when (down_opts ^. downloadPageImageFlag) $ downloadPageImagesLeafs ctx out_cfg mgr g
+			liftIO $ signalQSem (ctx ^. ctxBranchSem)
+			forM_ tasks wait
 
-		liftIO $ signalQSem (ctx ^. ctxBranchSem)
-
-		dt <- withTimer_ (forM_ tasks wait)
 		$logInfo $ "Done fetching gallery " <> (tshow . unrefine $ gid) <> ", time taken: " <> tshow dt
-
 		wait remaining_tasks
 
 runMainOptions :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => MainOptions -> m ()

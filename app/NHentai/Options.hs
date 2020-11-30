@@ -15,6 +15,7 @@ data DownloadOptions
 	= DownloadOptions
 		{ _downloadPageThumbnailFlag :: Bool
 		, _downloadPageImageFlag :: Bool
+		, _saveApiGalleryInfoFlag :: Bool
 		}
 	deriving (Show, Eq)
 
@@ -24,6 +25,7 @@ downloadOptionsParser :: Parser DownloadOptions
 downloadOptionsParser = DownloadOptions
 	<$> download_page_thumbnail
 	<*> download_page_image
+	<*> save_api_gallery_info
 	where
 	download_page_thumbnail = switch
 		( short 'T'
@@ -34,6 +36,11 @@ downloadOptionsParser = DownloadOptions
 		( short 'I'
 		<> long "images"
 		<> help "Download page images of a gallery"
+		)
+	save_api_gallery_info = switch
+		( short 'G'
+		<> long "gallery"
+		<> help "Download and save api gallery info"
 		)
 
 data OutputConfig
@@ -92,7 +99,7 @@ gidInputOptionParser = single <|> list_file
 	single = GidInputOptionSingle
 		<$> option refineReadM
 			( short 'g'
-			<> long "gallery"
+			<> long "gallery-id"
 			<> metavar "GALLERY_ID"
 			<> help "Which gallery to download"
 			)
@@ -140,7 +147,7 @@ mainOptionsParser = subparser $ main_download_command <> main_version_command <>
 			<> metavar "NUM_WORKERS"
 			<> value $$(refineTH @Positive @Int 1)
 			<> showDefault
-			<> help "Set the number of workers available for downloading gallery api JSONs concurrently"
+			<> help "Set the number of workers available for downloading api gallery JSONs concurrently"
 			)
 
 	main_version_command = command "version" $ do
