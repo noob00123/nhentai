@@ -57,6 +57,7 @@ library
 executable nhentai
   main-is: NHentai/Main.hs
   other-modules:
+      NHentai.Async
       NHentai.Options
       NHentai.Utils
       Paths_nhentai

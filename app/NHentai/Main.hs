@@ -13,7 +13,7 @@ module Main where
 
 import Control.Concurrent.QSem
 import Control.Error
-import Control.Lens hiding (Context)
+import Control.Lens
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Except
@@ -24,6 +24,7 @@ import Data.NHentai.Scraper.HomePage
 import Data.NHentai.Types
 import Data.Time
 import Data.Time.Format.ISO8601
+import NHentai.Async
 import NHentai.Options
 import NHentai.Utils
 import Network.HTTP.Client
@@ -45,26 +46,6 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import qualified Streaming as S
 import qualified Streaming.Prelude as S
-
-data Context
-	= Context
-		{ _ctxLeafSem :: QSem
-		, _ctxBranchSem :: QSem
-		}
-
-makeLenses ''Context
-
-asyncLeaf :: (MonadUnliftIO m) => Context -> m a -> m (Async a)
-asyncLeaf ctx f = async $ do
-	liftIO $ waitQSem (ctx ^. ctxLeafSem)
-	a <- f
-	liftIO $ signalQSem (ctx ^. ctxLeafSem)
-	pure a
-
-initContext :: MonadIO m => Refined Positive Int -> Refined Positive Int -> m Context
-initContext leaf_threads branch_threads = Context
-	<$> (liftIO . newQSem . unrefine $ leaf_threads)
-	<*> (liftIO . newQSem . unrefine $ branch_threads)
 
 data SmartHttpState =
 	SmartHttpState
@@ -154,7 +135,7 @@ getGidInputStream (GidInputOptionListFile file_path) = do
 downloadPagesWith :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m)
 	=> (MediaId -> PageIndex -> ImageType -> m URI)
 	-> (Lens' OutputConfig (GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath))
-	-> Context
+	-> AsyncContext
 	-> OutputConfig
 	-> Manager
 	-> ApiGallery
@@ -171,13 +152,13 @@ downloadPagesWith url_maker maker_lens ctx out_cfg mgr g = loop $$(refineTH 1) (
 			lift (asyncLeaf ctx $ downloadIfMissing file_path mgr req) >>= S.yield
 			loop pid' pages
 
-downloadPageThumbnailsLeafs :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
+downloadPageThumbnailsLeafs :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => AsyncContext -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
 downloadPageThumbnailsLeafs = downloadPagesWith mkPageThumbnailUri pageThumbnailPathMaker
 
-downloadPageImagesLeafs :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
+downloadPageImagesLeafs :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => AsyncContext -> OutputConfig -> Manager -> ApiGallery -> Stream (Of (Async ())) m ()
 downloadPageImagesLeafs = downloadPagesWith mkPageImageUri pageImagePathMaker
 
-downloadGalleries :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => Context -> OutputConfig -> DownloadOptions -> Manager -> S.Stream (Of GalleryId) m () -> m ()
+downloadGalleries :: (MonadCatch m, MonadLoggerIO m, MonadUnliftIO m) => AsyncContext -> OutputConfig -> DownloadOptions -> Manager -> S.Stream (Of GalleryId) m () -> m ()
 downloadGalleries ctx out_cfg down_opts mgr stream = S.uncons stream >>= \case
 	Nothing -> pure ()
 	Just (gid, stream') -> do
@@ -210,7 +191,7 @@ runMainOptions MainOptionsLatestGid = do
 	liftIO $ print (unrefine latest_gid)
 runMainOptions (MainOptionsDownload {..}) = do
 	mgr <- newTlsManager
-	ctx <- initContext mainOptNumLeafThreads mainOptNumBranchThreads
+	ctx <- initAsyncContext mainOptNumLeafThreads mainOptNumBranchThreads
 	let gid_stream = getGidInputStream mainOptGidInputOption
 	dt <- withTimer_ $ downloadGalleries ctx mainOptOutputConfig mainOptDownloadOptions mgr gid_stream
 	$logInfo $ "Finished! Time taken: " <> tshow dt
