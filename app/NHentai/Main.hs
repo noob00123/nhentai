@@ -20,6 +20,7 @@ import Control.Monad.Except
 import Control.Monad.Logger
 import Control.Monad.State
 import Data.NHentai.API.Gallery
+import Data.NHentai.API.Comment
 import Data.NHentai.Scraper.HomePage
 import Data.NHentai.Types
 import Data.Time
@@ -64,16 +65,16 @@ smartHttpLbs mgr req = do
 	(dt, rep) <- withTimer $ (flip evalStateT) initSmartHttpState $ fix $ \loop -> do
 		rep <- (liftIO $ httpLbs req mgr) `catch` \(e :: SomeException) -> do
 			counter <- retryCounter <+= 1
-			$logDebug $ (tshow . getUri $ req) <> " failed (Counter: " <> tshow counter <> "), retrying + reduce download speed"
+			$logDebug $ (tshow . getUri $ req) <> " failed (Counter: " <> tshow counter <> "), retrying + reduce requesting speed"
 			liftIO (randomRIO (0, counter * 100000)) >>= threadDelay
 			loop
 
 		if responseStatus rep == serviceUnavailable503 then do
-			$logDebug $ (tshow . getUri $ req) <> " failed: Status 503, redownloading"
+			$logDebug $ (tshow . getUri $ req) <> " failed: Status 503, re-requesting"
 			loop
 		else do
 			pure rep
-	$logDebug $ "Done downloading " <> uri_text <> ", content size: " <> tshow (BL.length . responseBody $ rep) <> ", time taken: " <> tshow dt
+	$logDebug $ "Done requesting " <> uri_text <> ", content size: " <> tshow (BL.length . responseBody $ rep) <> ", time taken: " <> tshow dt
 	pure rep
 
 downloadIfMissing :: (MonadCatch m, MonadLoggerIO m) => FilePath -> Manager -> Request -> m ()
@@ -82,7 +83,7 @@ downloadIfMissing file_path mgr req = do
 	if file_exists then do
 		$logDebug $ "File " <> (T.pack file_path) <> " exists, skip downloading " <> (tshow . getUri $ req)
 	else do
-		$logDebug $ "File " <> (T.pack file_path) <> " does not exist, saving + downloading " <> (tshow . getUri $ req)
+		$logDebug $ "File " <> (T.pack file_path) <> " does not exist, downloading " <> (tshow . getUri $ req)
 		rep <- smartHttpLbs mgr req
 		mkParentDirectoryIfMissing file_path
 		liftIO $ BL.writeFile file_path (responseBody rep)
@@ -91,13 +92,13 @@ httpCached :: (MonadCatch m, MonadLoggerIO m) => FilePath -> Bool -> Manager -> 
 httpCached file_path save mgr req = do
 	file_exists <- liftIO $ doesFileExist file_path
 	if file_exists then do
-		$logDebug $ "File " <> (T.pack file_path) <> " exists, skip downloading " <> (tshow . getUri $ req)
+		$logDebug $ "File " <> (T.pack file_path) <> " exists, skip requesting " <> (tshow . getUri $ req)
 		liftIO $ BL.readFile file_path
 	else do
 		if save then
 			$logDebug $ "File " <> (T.pack file_path) <> " does not exist, saving + downloading " <> (tshow . getUri $ req)
 		else
-			$logDebug $ "File " <> (T.pack file_path) <> " does not exist, downloading " <> (tshow . getUri $ req)
+			$logDebug $ "File " <> (T.pack file_path) <> " does not exist, requesting " <> (tshow . getUri $ req)
 		rep <- smartHttpLbs mgr req
 		let body = responseBody rep
 		when save $ do
@@ -169,7 +170,7 @@ downloadGalleries ctx out_cfg down_opts mgr stream = S.uncons stream >>= \case
 			$logInfo $ "Fetching gallery " <> (tshow . unrefine $ gid)
 			let g_json_path = gid & (out_cfg ^. galleryApiJsonPathMaker)
 			g_req <- mkApiGalleryUri gid >>= requestFromModernURI
-			tasks <- A.eitherDecode <$> httpCached g_json_path (down_opts ^. saveApiGalleryInfoFlag) mgr g_req >>= \case
+			tasks <- A.eitherDecode <$> httpCached g_json_path (down_opts ^. saveApiGalleryFlag) mgr g_req >>= \case
 				Left _ -> pure []
 				Right (ApiGalleryResultError err) -> do
 					$logError $ "Gallery " <> (tshow . unrefine $ gid) <> " gives out an error: " <> tshow err
@@ -177,6 +178,10 @@ downloadGalleries ctx out_cfg down_opts mgr stream = S.uncons stream >>= \case
 				Right (ApiGalleryResultSuccess g) -> S.toList_ $ do
 					when (down_opts ^. downloadPageThumbnailFlag) $ downloadPageThumbnailsLeafs ctx out_cfg mgr g
 					when (down_opts ^. downloadPageImageFlag) $ downloadPageImagesLeafs ctx out_cfg mgr g
+					when (down_opts ^. downloadApiCommentsFlag) $ do
+						req <- lift $ mkApiCommentsUri (g ^. mediaId) >>= requestFromModernURI
+						lift (asyncLeaf ctx $ downloadIfMissing (gid & out_cfg ^. commentsApiJsonPathMaker) mgr req) >>= S.yield
+
 			liftIO $ signalQSem (ctx ^. ctxBranchSem)
 			forM_ tasks wait
 

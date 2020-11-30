@@ -15,7 +15,8 @@ data DownloadOptions
 	= DownloadOptions
 		{ _downloadPageThumbnailFlag :: Bool
 		, _downloadPageImageFlag :: Bool
-		, _saveApiGalleryInfoFlag :: Bool
+		, _downloadApiCommentsFlag :: Bool
+		, _saveApiGalleryFlag :: Bool
 		}
 	deriving (Show, Eq)
 
@@ -25,7 +26,8 @@ downloadOptionsParser :: Parser DownloadOptions
 downloadOptionsParser = DownloadOptions
 	<$> download_page_thumbnail
 	<*> download_page_image
-	<*> save_api_gallery_info
+	<*> download_api_comments
+	<*> save_api_gallery
 	where
 	download_page_thumbnail = switch
 		( short 'T'
@@ -37,15 +39,21 @@ downloadOptionsParser = DownloadOptions
 		<> long "images"
 		<> help "Download page images of a gallery"
 		)
-	save_api_gallery_info = switch
+	download_api_comments = switch
+		( short 'C'
+		<> long "comments"
+		<> help "Download api comments"
+		)
+	save_api_gallery = switch
 		( short 'G'
 		<> long "gallery"
-		<> help "Download and save api gallery info"
+		<> help "Save api gallery after requesting"
 		)
 
 data OutputConfig
 	= OutputConfig
 		{ _galleryApiJsonPathMaker :: GalleryId -> FilePath
+		, _commentsApiJsonPathMaker :: GalleryId -> FilePath
 		, _pageThumbnailPathMaker :: GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath
 		, _pageImagePathMaker :: GalleryId -> MediaId -> PageIndex -> ImageType -> FilePath
 		}
@@ -55,6 +63,7 @@ makeClassy ''OutputConfig
 simpleOutputConfig :: (GalleryId -> FilePath) -> OutputConfig
 simpleOutputConfig prefix = OutputConfig
 	{ _galleryApiJsonPathMaker = \gid -> prefix gid </> "gallery.json"
+	, _commentsApiJsonPathMaker = \gid -> prefix gid </> "comments.json"
 	, _pageThumbnailPathMaker = \gid _ pid img_type -> prefix gid </> (show (unrefine pid) <> "t." <> extension # img_type)
 	, _pageImagePathMaker = \gid _ pid img_type -> prefix gid </> (show (unrefine pid) <> "." <> extension # img_type)
 	}

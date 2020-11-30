@@ -4,7 +4,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Data.NHentai.API.Comment
-( mkApiCommentUri
+( mkApiCommentsUri
 , ApiPoster(..)
 , posterId
 , posterUsername
@@ -36,8 +36,8 @@ import Text.URI.Lens
 import Text.URI.QQ
 import qualified Data.Text as T
 
-mkApiCommentUri :: MonadThrow m => GalleryId -> m URI
-mkApiCommentUri gid = do
+mkApiCommentsUri :: MonadThrow m => GalleryId -> m URI
+mkApiCommentsUri gid = do
 	uri <- mkApiGalleryUri gid
 	pure $ uri & uriPath %~ (<> [[pathPiece|comments|]])
 
