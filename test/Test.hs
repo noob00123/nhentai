@@ -55,7 +55,7 @@ testGalleryApi gid = testCase ("api/gallery/" <> show (unrefine gid)) $ do
 
 testCommentApi :: GalleryId -> TestTree
 testCommentApi gid = testCase ("api/gallery/" <> show (unrefine gid) <> "/comments") $ do
-	uri <- mkApiCommentUri gid
+	uri <- mkApiCommentsUri gid
 	httpJson @[ApiComment] (renderStr uri) >>= \case
 		Right _ -> pure ()
 		Left err -> assertFailure $ "Fail to parse json: " <> show err
