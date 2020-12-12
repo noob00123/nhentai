@@ -1,5 +1,7 @@
-# nhentai
+# nhentai (halted)
 Scraping/downloading [nhentai](https://nhentai.net) galleries and JSONs.
+
+*NOTE:* I am going to port the entire thing to Idris2 since I'm somewhat fed up with Haskell. Unfortunately, Idris2 is still under rapid development and libraries are virtually nonexistent, so I will probably write my own libraries or wait for the big boys to code some. Don't expect me to get everything done in a night.
 
 ## TODO
 
